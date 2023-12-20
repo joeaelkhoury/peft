@@ -112,8 +112,9 @@ class LoraLayer(BaseTunerLayer):
     def reset_lora_parameters(self, adapter_name, init_lora_weights):
         if init_lora_weights is False:
             return
-
-        if adapter_name in self.lora_A.keys():
+        
+        lora_A_keys = list(self.lora_A.keys())
+        if adapter_name in lora_A_keys:
             if init_lora_weights is True:
                 # initialize A the same way as the default for nn.Linear and B to zero
                 # https://github.com/microsoft/LoRA/blob/a0a92e0f26c067cf94747bdbf1ce73793fa44d19/loralib/layers.py#L124
@@ -123,7 +124,9 @@ class LoraLayer(BaseTunerLayer):
             else:
                 raise ValueError(f"Unknown initialization {init_lora_weights=}")
             nn.init.zeros_(self.lora_B[adapter_name].weight)
-        if adapter_name in self.lora_embedding_A.keys():
+        
+        lora_embedding_A_keys = list(self.lora_embedding_A.keys())
+        if adapter_name in lora_embedding_A_keys:
             # initialize a the same way as the default for nn.linear and b to zero
             nn.init.zeros_(self.lora_embedding_A[adapter_name])
             nn.init.normal_(self.lora_embedding_B[adapter_name])
@@ -139,11 +142,15 @@ class LoraLayer(BaseTunerLayer):
         }
 
         qweight, lora_A, lora_B = loftq_init(weight, **kwargs)
-        if adapter_name in self.lora_A.keys():
+
+        lora_A_keys = list(self.lora_A.keys())
+        if adapter_name in lora_A_keys:
             # initialize A the same way as the default for nn.Linear and B to zero
             self.lora_A[adapter_name].weight.data = lora_A
             self.lora_B[adapter_name].weight.data = lora_B
-        if adapter_name in self.lora_embedding_A.keys():
+        
+        lora_embedding_A_keys = list(self.lora_embedding_A.keys())
+        if adapter_name in lora_embedding_A_keys:
             # initialize a the same way as the default for nn.linear and b to zero
             self.lora_embedding_A[adapter_name].weight.data = lora_A
             self.lora_embedding_B[adapter_name].weight.data = lora_B
@@ -159,15 +166,17 @@ class LoraLayer(BaseTunerLayer):
         if scale == 1:
             return
 
+        lora_A_keys = list(self.lora_A.keys())
         for active_adapter in self.active_adapters:
-            if active_adapter not in self.lora_A.keys():
+            if active_adapter not in lora_A_keys:
                 continue
 
             self.scaling[active_adapter] *= scale
 
     def unscale_layer(self, scale=None) -> None:
+        lora_A_keys = list(self.lora_A.keys())
         for active_adapter in self.active_adapters:
-            if active_adapter not in self.lora_A.keys():
+            if active_adapter not in lora_A_keys:
                 continue
 
             if scale is None:
@@ -232,7 +241,8 @@ class Linear(nn.Module, LoraLayer):
             adapter_names = self.active_adapters
 
         for active_adapter in adapter_names:
-            if active_adapter in self.lora_A.keys():
+            lora_A_keys = list(self.lora_A.keys())
+            if active_adapter in lora_A_keys:
                 base_layer = self.get_base_layer()
                 if safe_merge:
                     # Note that safe_merge will be slower than the normal merge
@@ -259,7 +269,8 @@ class Linear(nn.Module, LoraLayer):
             return
         while len(self.merged_adapters) > 0:
             active_adapter = self.merged_adapters.pop()
-            if active_adapter in self.lora_A.keys():
+            lora_A_keys = list(self.lora_A.keys())
+            if active_adapter in lora_A_keys:
                 self.get_base_layer().weight.data -= self.get_delta_weight(active_adapter)
 
     def get_delta_weight(self, adapter) -> torch.Tensor:
@@ -307,8 +318,9 @@ class Linear(nn.Module, LoraLayer):
             result = self.base_layer(x, *args, **kwargs)
         else:
             result = self.base_layer(x, *args, **kwargs)
+            lora_A_keys = list(self.lora_A.keys())
             for active_adapter in self.active_adapters:
-                if active_adapter not in self.lora_A.keys():
+                if active_adapter not in lora_A_keys:
                     continue
                 lora_A = self.lora_A[active_adapter]
                 lora_B = self.lora_B[active_adapter]
@@ -400,8 +412,9 @@ class Embedding(nn.Module, LoraLayer):
         if adapter_names is None:
             adapter_names = self.active_adapters
 
+        lora_embedding_A_keys = list(self.lora_embedding_A.keys())
         for active_adapter in adapter_names:
-            if active_adapter in self.lora_embedding_A.keys():
+            if active_adapter in lora_embedding_A_keys:
                 base_layer = self.get_base_layer()
                 if safe_merge:
                     # Note that safe_merge will be slower than the normal merge
@@ -426,9 +439,11 @@ class Embedding(nn.Module, LoraLayer):
         if not self.merged:
             warnings.warn("Already unmerged. Nothing to do.")
             return
+        
+        lora_A_embedding_keys = list(self.lora_embedding_A.keys())
         while len(self.merged_adapters) > 0:
             active_adapter = self.merged_adapters.pop()
-            if active_adapter in self.lora_embedding_A.keys():
+            if active_adapter in lora_A_embedding_keys:
                 self.get_base_layer().weight.data -= self.get_delta_weight(active_adapter)
 
     def get_delta_weight(self, adapter) -> torch.Tensor:
@@ -579,8 +594,9 @@ class Conv2d(nn.Module, LoraLayer):
         if adapter_names is None:
             adapter_names = self.active_adapters
 
+        lora_A_keys = list(self.lora_A.keys())
         for active_adapter in adapter_names:
-            if active_adapter in self.lora_A.keys():
+            if active_adapter in lora_A_keys:
                 base_layer = self.get_base_layer()
                 if safe_merge:
                     # Note that safe_merge will be slower than the normal merge
@@ -604,9 +620,11 @@ class Conv2d(nn.Module, LoraLayer):
         if not self.merged:
             warnings.warn("Already unmerged. Nothing to do.")
             return
+        
+        lora_A_keys = list(self.lora_A.keys())
         while len(self.merged_adapters) > 0:
             active_adapter = self.merged_adapters.pop()
-            if active_adapter in self.lora_A.keys():
+            if active_adapter in lora_A_keys:
                 self.get_base_layer().weight.data -= self.get_delta_weight(active_adapter)
 
     def get_delta_weight(self, adapter) -> torch.Tensor:
@@ -668,8 +686,9 @@ class Conv2d(nn.Module, LoraLayer):
             result = self.base_layer(x, *args, **kwargs)
         else:
             result = self.base_layer(x, *args, **kwargs)
+            lora_A_keys = list(self.lora_A.keys())
             for active_adapter in self.active_adapters:
-                if active_adapter not in self.lora_A.keys():
+                if active_adapter not in lora_A_keys:
                     continue
                 lora_A = self.lora_A[active_adapter]
                 lora_B = self.lora_B[active_adapter]
