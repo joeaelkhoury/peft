@@ -583,7 +583,7 @@ class LoraModel(BaseTuner):
             k = int(density * tensor.view(-1).shape[0])
             assert k > 0, "not gonna zero out the whole tensor buddy"
             mask = torch.zeros_like(tensor)
-            w = tensor.abs().view(-1)
+            w = tensor.abs().view(-1).float()
             topk = torch.topk(w, k=k, largest=True)
             mask.view(-1)[topk.indices] = 1
 
