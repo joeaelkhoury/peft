@@ -521,7 +521,7 @@ class LoraModel(BaseTuner):
                     )
                 elif combination_type == "ties":
                     self._ties_weighted_adapter(
-                        self, adapters, weights, new_rank, target, target_lora_A, target_lora_B, ties_density
+                        adapters, weights, new_rank, target, target_lora_A, target_lora_B, ties_density
                     )
 
     def _svd_weighted_adapter(
