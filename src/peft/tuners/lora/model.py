@@ -22,7 +22,7 @@ from dataclasses import asdict, replace
 from enum import Enum
 from functools import reduce
 from itertools import chain
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import torch
 from torch import nn
@@ -367,6 +367,7 @@ class LoraModel(BaseTuner):
         svd_clamp=None,
         svd_full_matrices=True,
         svd_driver=None,
+        ties_density=None,
     ) -> None:
         """
         This method adds a new adapter by merging the given adapters with the given weights.
@@ -383,9 +384,9 @@ class LoraModel(BaseTuner):
             adapter_name (`str`):
                 Name of the new adapter.
             combination_type (`str`):
-                Type of merging. Can be one of [`svd`, `linear`, `cat`]. When using the `cat` combination_type you
-                should be aware that rank of the resulting adapter will be equal to the sum of all adapters ranks. So
-                it's possible that the mixed adapter may become too big and result in OOM errors.
+                Type of merging. Can be one of [`svd`, `linear`, `cat`, `ties`]. When using the `cat` combination_type
+                you should be aware that rank of the resulting adapter will be equal to the sum of all adapters ranks.
+                So it's possible that the mixed adapter may become too big and result in OOM errors.
             svd_rank (`int`, *optional*):
                 Rank of output adapter for svd. If None provided, will use max rank of merging adapters.
             svd_clamp (`float`, *optional*):
@@ -398,6 +399,9 @@ class LoraModel(BaseTuner):
                 Name of the cuSOLVER method to be used. This keyword argument only works when merging on CUDA. Can be
                 one of [None, `gesvd`, `gesvdj`, `gesvda`]. For more info please refer to `torch.linalg.svd`
                 documentation. Defaults to None.
+            ties_density (`float`, *optional*):
+                Value between 0 and 1. 0 represents all values are trimmed and 1 represents no values are trimmed. TIES
+                paper uses 0.2 as the density value, i.e., 20% of top magnitude features are preserved.
         """
 
         if adapter_name in list(self.peft_config.keys()):
@@ -410,10 +414,12 @@ class LoraModel(BaseTuner):
         combination_type = "linear" if len(adapters) == 1 else combination_type
 
         adapters_ranks = [self.peft_config[adapter].r for adapter in adapters]
-        if combination_type == "linear":
+        if combination_type in ("linear", "ties"):
             # all adapters ranks should be same, new rank is just this value
             if len(set(adapters_ranks)) != 1:
-                raise ValueError("All adapters must have the same r value when using `linear` combination_type")
+                raise ValueError(
+                    "All adapters must have the same r value when using `linear` or `ties` combination_type"
+                )
             new_rank = adapters_ranks[0]
         elif combination_type == "cat":
             # adapters ranks may be different, new rank is sum of all ranks
@@ -513,6 +519,10 @@ class LoraModel(BaseTuner):
                         full_matrices=svd_full_matrices,
                         driver=svd_driver,
                     )
+                elif combination_type == "ties":
+                    self._ties_weighted_adapter(
+                        self, adapters, weights, new_rank, target, target_lora_A, target_lora_B, ties_density
+                    )
 
     def _svd_weighted_adapter(
         self,
@@ -566,6 +576,76 @@ class LoraModel(BaseTuner):
             U = U.reshape(target_lora_B.data.shape)
             Vh = Vh.reshape(target_lora_A.data.shape)
         return Vh, U
+
+    def _ties_weighted_adapter(self, adapters, weights, new_rank, target, target_lora_A, target_lora_B, ties_density):
+        # adapted from https://github.com/cg123/mergekit/blob/aba81d9d3b9c187899b5a646e005ebc2c1035440/mergekit/sparsify.py#L27
+        def sparsify(tensor, density):
+            k = int(density * tensor.view(-1).shape[0])
+            assert k > 0, "not gonna zero out the whole tensor buddy"
+            mask = torch.zeros_like(tensor)
+            w = tensor.abs().view(-1)
+            topk = torch.topk(w, k=k, largest=True)
+            mask.view(-1)[topk.indices] = 1
+
+            return tensor * mask
+
+        # adapted from
+        # https://github.com/cg123/mergekit/blob/aba81d9d3b9c187899b5a646e005ebc2c1035440/mergekit/merge_methods/generalized_task_arithmetic.py#L142C13
+        def get_consensus_mask(
+            delta: torch.Tensor,
+            method: Literal["sum", "count"] = "sum",
+        ):
+            """Returns a mask determining which delta vectors should be merged
+            into the final model.
+
+            For the methodology described in the paper use 'sum'. For a simpler naive count of signs, use 'count'."""
+
+            sign = delta.sign()
+
+            if method == "sum":
+                sign_weight = (sign * delta.abs()).sum(dim=0)
+                majority_sign = (sign_weight >= 0) * 2 - 1
+                del sign_weight
+            elif method == "count":
+                majority_sign = (sign.sum(dim=0) >= 0) * 2 - 1
+            else:
+                raise RuntimeError(f'Unimplemented mask method "{method}"')
+
+            return sign == majority_sign
+
+        def perform_ties(deltas, weights, consensus_method="sum"):
+            while len(deltas.shape) > len(weights.shape):
+                weights.unsqueeze_(-1)
+            weighted_deltas = deltas * weights
+            # Elect Sign
+            mask = get_consensus_mask(weighted_deltas, method=consensus_method)
+            # Disjoint Merge
+            mixed_delta = (weighted_deltas * mask).sum(dim=0)
+            divisor = (weights * mask).sum(dim=0)
+            divisor[divisor == 0] = 1
+            mixed_delta /= divisor
+            return mixed_delta
+
+        lora_A_deltas = []
+        lora_B_deltas = []
+        for adapter in adapters:
+            if adapter in target.lora_A:
+                current_adapter_lora_A = target.lora_A[adapter].weight
+                current_adapter_lora_B = target.lora_B[adapter].weight
+            elif adapter in target.lora_embedding_A:
+                current_adapter_lora_A = target.lora_embedding_A[adapter]
+                current_adapter_lora_B = target.lora_embedding_B[adapter]
+            else:
+                continue
+            # Trim
+            lora_A_deltas.append(sparsify(current_adapter_lora_A.data, ties_density))
+            lora_B_deltas.append(sparsify(current_adapter_lora_B.data, ties_density))
+
+        lora_A_deltas = torch.stack(lora_A_deltas, dim=0)
+        lora_B_deltas = torch.stack(lora_B_deltas, dim=0)
+
+        target_lora_A.data += perform_ties(lora_A_deltas, torch.tensor(weights, device=lora_A_deltas.device))
+        target_lora_B.data += perform_ties(lora_B_deltas, torch.tensor(weights, device=lora_A_deltas.device))
 
     def delete_adapter(self, adapter_name: str) -> None:
         """
