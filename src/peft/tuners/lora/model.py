@@ -606,8 +606,8 @@ class LoraModel(BaseTuner):
             else:
                 continue
             valid_weights.append(math.sqrt(weight))
-            lora_A_deltas.append(current_adapter_lora_A.data, density)
-            lora_B_deltas.append(current_adapter_lora_B.data, density)
+            lora_A_deltas.append(current_adapter_lora_A.data)
+            lora_B_deltas.append(current_adapter_lora_B.data)
 
         lora_deltas = [lora_A_deltas, lora_B_deltas]
         for i, task_tensors in enumerate(lora_deltas):
