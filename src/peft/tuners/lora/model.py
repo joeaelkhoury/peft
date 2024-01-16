@@ -546,13 +546,13 @@ class LoraModel(BaseTuner):
             raise ValueError("No matching LoRAs found. Please raise an issue on Github.")
         delta_weight = [target.get_delta_weight(adapter) for adapter in valid_adapters]
         valid_weights = torch.tensor(valid_weights).to(delta_weight[0].device)
-        if combination_type == "linear":
+        if combination_type == "svd":
             delta_weight = task_arthimetic(delta_weight, valid_weights)
-        elif combination_type == "ties":
+        elif combination_type == "ties_svd":
             delta_weight = ties(delta_weight, valid_weights, density, majority_sign_method)
-        elif combination_type == "dare_linear":
+        elif combination_type == "dare_linear_svd":
             delta_weight = dare_linear(delta_weight, valid_weights, density)
-        elif combination_type == "dare_ties":
+        elif combination_type == "dare_ties_svd":
             delta_weight = dare_ties(delta_weight, valid_weights, density, majority_sign_method)
         else:
             raise ValueError("Invalid combination type")
