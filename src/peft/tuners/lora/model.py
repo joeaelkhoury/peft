@@ -37,6 +37,7 @@ from peft.utils import (
     _get_submodules,
     get_quantization_config,
 )
+from peft.utils.merge_utils import dare_linear, dare_ties, task_arthimetic, ties
 
 from .config import LoraConfig
 from .gptq import dispatch_gptq
@@ -367,7 +368,8 @@ class LoraModel(BaseTuner):
         svd_clamp=None,
         svd_full_matrices=True,
         svd_driver=None,
-        ties_density=None,
+        density=None,
+        majority_sign_method="total",
     ) -> None:
         """
         This method adds a new adapter by merging the given adapters with the given weights.
@@ -384,7 +386,8 @@ class LoraModel(BaseTuner):
             adapter_name (`str`):
                 Name of the new adapter.
             combination_type (`str`):
-                Type of merging. Can be one of [`svd`, `linear`, `cat`, `ties`]. When using the `cat` combination_type
+                Type of merging. Can be one of [`svd`, `linear`, `cat`, `ties`, `ties_svd`, `dare_ties`, `dare_linear`, `dare_ties_svd`, `dare_linear_svd`].
+                When using the `cat` combination_type
                 you should be aware that rank of the resulting adapter will be equal to the sum of all adapters ranks.
                 So it's possible that the mixed adapter may become too big and result in OOM errors.
             svd_rank (`int`, *optional*):
@@ -402,6 +405,7 @@ class LoraModel(BaseTuner):
             ties_density (`float`, *optional*):
                 Value between 0 and 1. 0 represents all values are trimmed and 1 represents no values are trimmed. TIES
                 paper uses 0.2 as the density value, i.e., 20% of top magnitude features are preserved.
+            majority_sign_method (`str`):The method to use to get the magnitude of the sign vlaues. Should be one of ["total", "frequency"].
         """
 
         if adapter_name in list(self.peft_config.keys()):
@@ -414,18 +418,18 @@ class LoraModel(BaseTuner):
         combination_type = "linear" if len(adapters) == 1 else combination_type
 
         adapters_ranks = [self.peft_config[adapter].r for adapter in adapters]
-        if combination_type in ("linear", "ties"):
+        if combination_type in ("linear", "ties", "dare_ties", "dare_linear"):
             # all adapters ranks should be same, new rank is just this value
             if len(set(adapters_ranks)) != 1:
                 raise ValueError(
-                    "All adapters must have the same r value when using `linear` or `ties` combination_type"
+                    "All adapters must have the same r value when using combination_type linear, ties, dare_ties or dare_linear."
                 )
             new_rank = adapters_ranks[0]
         elif combination_type == "cat":
             # adapters ranks may be different, new rank is sum of all ranks
             # be careful, because output adapter rank may be really big if mixing a lot of adapters
             new_rank = sum(adapters_ranks)
-        elif combination_type == "svd":
+        elif "svd" in combination_type:
             # new rank is the max of all ranks of the adapters if not provided
             new_rank = svd_rank or max(adapters_ranks)
         else:
@@ -475,19 +479,7 @@ class LoraModel(BaseTuner):
 
                 target_lora_A.data = target_lora_A.data * 0.0
                 target_lora_B.data = target_lora_B.data * 0.0
-                if combination_type == "linear":
-                    for adapter, weight in zip(adapters, weights):
-                        if adapter in target.lora_A:
-                            current_adapter_lora_A = target.lora_A[adapter].weight
-                            current_adapter_lora_B = target.lora_B[adapter].weight
-                        elif adapter in target.lora_embedding_A:
-                            current_adapter_lora_A = target.lora_embedding_A[adapter]
-                            current_adapter_lora_B = target.lora_embedding_B[adapter]
-                        else:
-                            continue
-                        target_lora_A.data += current_adapter_lora_A.data * math.sqrt(weight) * target.scaling[adapter]
-                        target_lora_B.data += current_adapter_lora_B.data * math.sqrt(weight)
-                elif combination_type == "cat":
+                if combination_type == "cat":
                     loras_A, loras_B = [], []
                     for adapter, weight in zip(adapters, weights):
                         if adapter in target.lora_A:
@@ -507,31 +499,37 @@ class LoraModel(BaseTuner):
                     loras_B = torch.cat(loras_B, dim=1)
                     target_lora_A.data[: loras_A.shape[0], :] = loras_A
                     target_lora_B.data[:, : loras_B.shape[1]] = loras_B
-                elif combination_type == "svd":
-                    target_lora_A.data, target_lora_B.data = self._svd_weighted_adapter(
+                elif combination_type in ["svd", "ties_svd", "dare_linear_svd", "dare_ties_svd"]:
+                    target_lora_A.data, target_lora_B.data = self._svd_generalized_task_arithmetic_weighted_adapter(
+                        combination_type,
                         adapters,
                         weights,
                         new_rank,
                         target,
                         target_lora_A,
                         target_lora_B,
+                        density,
+                        majority_sign_method,
                         svd_clamp,
                         full_matrices=svd_full_matrices,
                         driver=svd_driver,
                     )
-                elif combination_type == "ties":
-                    self._ties_weighted_adapter(
-                        adapters, weights, new_rank, target, target_lora_A, target_lora_B, ties_density
+                elif combination_type in ["linear", "ties", "dare_linear", "dare_ties"]:
+                    target_lora_A.data, target_lora_B.data = self._generalized_task_arithmetic_weighted_adapter(
+                        combination_type, adapters, weights, target, density, majority_sign_method
                     )
 
-    def _svd_weighted_adapter(
+    def _svd_generalized_task_arithmetic_weighted_adapter(
         self,
+        combination_type,
         adapters,
         weights,
         new_rank,
         target,
         target_lora_A,
         target_lora_B,
+        density,
+        majority_sign_method,
         clamp=None,
         full_matrices=True,
         driver=None,
@@ -546,10 +544,18 @@ class LoraModel(BaseTuner):
         # if no valid adapter, nothing to do
         if len(valid_adapters) == 0:
             raise ValueError("No matching LoRAs found. Please raise an issue on Github.")
+        delta_weight = [target.get_delta_weight(adapter) for adapter in valid_adapters]
+        if combination_type == "linear":
+            delta_weight = task_arthimetic(delta_weight, valid_weights)
+        elif combination_type == "ties":
+            delta_weight = ties(delta_weight, valid_weights, density, majority_sign_method)
+        elif combination_type == "dare_linear":
+            delta_weight = dare_linear(delta_weight, valid_weights, density)
+        elif combination_type == "dare_ties":
+            delta_weight = dare_ties(delta_weight, valid_weights, density, majority_sign_method)
+        else:
+            raise ValueError("Invalid combination type")
 
-        delta_weight = valid_weights[0] * target.get_delta_weight(valid_adapters[0])
-        for adapter, weight in zip(valid_adapters[1:], valid_weights[1:]):
-            delta_weight += weight * target.get_delta_weight(adapter)
         conv2d = isinstance(target, Conv2d)
         if conv2d:
             conv2d_1x1 = target.weight.size()[2:4] == (1, 1)
@@ -577,58 +583,20 @@ class LoraModel(BaseTuner):
             Vh = Vh.reshape(target_lora_A.data.shape)
         return Vh, U
 
-    def _ties_weighted_adapter(self, adapters, weights, new_rank, target, target_lora_A, target_lora_B, ties_density):
-        # adapted from https://github.com/cg123/mergekit/blob/aba81d9d3b9c187899b5a646e005ebc2c1035440/mergekit/sparsify.py#L27
-        def sparsify(tensor, density):
-            k = int(density * tensor.view(-1).shape[0])
-            assert k > 0, "not gonna zero out the whole tensor buddy"
-            mask = torch.zeros_like(tensor)
-            w = tensor.abs().view(-1).float()
-            topk = torch.topk(w, k=k, largest=True)
-            mask.view(-1)[topk.indices] = 1
-
-            return tensor * mask
-
-        # adapted from
-        # https://github.com/cg123/mergekit/blob/aba81d9d3b9c187899b5a646e005ebc2c1035440/mergekit/merge_methods/generalized_task_arithmetic.py#L142C13
-        def get_consensus_mask(
-            delta: torch.Tensor,
-            method: Literal["sum", "count"] = "sum",
-        ):
-            """Returns a mask determining which delta vectors should be merged
-            into the final model.
-
-            For the methodology described in the paper use 'sum'. For a simpler naive count of signs, use 'count'."""
-
-            sign = delta.sign()
-
-            if method == "sum":
-                sign_weight = (sign * delta.abs()).sum(dim=0)
-                majority_sign = (sign_weight >= 0) * 2 - 1
-                del sign_weight
-            elif method == "count":
-                majority_sign = (sign.sum(dim=0) >= 0) * 2 - 1
-            else:
-                raise RuntimeError(f'Unimplemented mask method "{method}"')
-
-            return sign == majority_sign
-
-        def perform_ties(deltas, weights, consensus_method="sum"):
-            while len(deltas.shape) > len(weights.shape):
-                weights.unsqueeze_(-1)
-            weighted_deltas = deltas * weights
-            # Elect Sign
-            mask = get_consensus_mask(weighted_deltas, method=consensus_method)
-            # Disjoint Merge
-            mixed_delta = (weighted_deltas * mask).sum(dim=0)
-            divisor = (weights * mask).sum(dim=0)
-            divisor[divisor == 0] = 1
-            mixed_delta /= divisor
-            return mixed_delta
-
+    def _generalized_task_arithmetic_weighted_adapter(
+        self,
+        combination_type,
+        adapters,
+        weights,
+        target,
+        density,
+        majority_sign_method,
+    ):
+        # account weights for LoRA A and B layers.
+        valid_weights = []
         lora_A_deltas = []
         lora_B_deltas = []
-        for adapter in adapters:
+        for adapter, weight in zip(adapters, weights):
             if adapter in target.lora_A:
                 current_adapter_lora_A = target.lora_A[adapter].weight
                 current_adapter_lora_B = target.lora_B[adapter].weight
@@ -637,15 +605,23 @@ class LoraModel(BaseTuner):
                 current_adapter_lora_B = target.lora_embedding_B[adapter]
             else:
                 continue
-            # Trim
-            lora_A_deltas.append(sparsify(current_adapter_lora_A.data, ties_density))
-            lora_B_deltas.append(sparsify(current_adapter_lora_B.data, ties_density))
+            valid_weights.append(math.sqrt(weight))
+            lora_A_deltas.append(current_adapter_lora_A.data, density)
+            lora_B_deltas.append(current_adapter_lora_B.data, density)
 
-        lora_A_deltas = torch.stack(lora_A_deltas, dim=0)
-        lora_B_deltas = torch.stack(lora_B_deltas, dim=0)
-
-        target_lora_A.data += perform_ties(lora_A_deltas, torch.tensor(weights, device=lora_A_deltas.device))
-        target_lora_B.data += perform_ties(lora_B_deltas, torch.tensor(weights, device=lora_A_deltas.device))
+        lora_deltas = [lora_A_deltas, lora_B_deltas]
+        for i, task_tensors in enumerate(lora_deltas):
+            if combination_type == "linear":
+                lora_deltas[i] = task_arthimetic(task_tensors, valid_weights)
+            elif combination_type == "ties":
+                lora_deltas[i] = ties(task_tensors, valid_weights, density, majority_sign_method)
+            elif combination_type == "dare_linear":
+                lora_deltas[i] = dare_linear(task_tensors, valid_weights, density)
+            elif combination_type == "dare_ties":
+                lora_deltas[i] = dare_ties(task_tensors, valid_weights, density, majority_sign_method)
+            else:
+                raise ValueError("Invalid combination type")
+        return lora_deltas
 
     def delete_adapter(self, adapter_name: str) -> None:
         """
