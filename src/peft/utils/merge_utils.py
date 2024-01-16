@@ -28,7 +28,7 @@ def magnitude_based_pruning(tensor: torch.Tensor, density: float) -> torch.Tenso
     """
     mask = torch.zeros_like(tensor).view(-1)
     k = int(density * tensor.view(-1).shape[0])
-    top_k = torch.topk(tensor.abs().view(-1).float(), k=k, largest=True)
+    top_k = torch.topk(tensor.abs().view(-1), k=k, largest=True)
     mask[top_k[1]] = 1
     return tensor * mask.view(tensor.shape)
 
