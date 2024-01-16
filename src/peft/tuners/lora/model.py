@@ -545,6 +545,7 @@ class LoraModel(BaseTuner):
         if len(valid_adapters) == 0:
             raise ValueError("No matching LoRAs found. Please raise an issue on Github.")
         delta_weight = [target.get_delta_weight(adapter) for adapter in valid_adapters]
+        valid_weights = torch.tensor(valid_weights).to(delta_weight[0].device)
         if combination_type == "linear":
             delta_weight = task_arthimetic(delta_weight, valid_weights)
         elif combination_type == "ties":
@@ -608,7 +609,7 @@ class LoraModel(BaseTuner):
             valid_weights.append(math.sqrt(weight))
             lora_A_deltas.append(current_adapter_lora_A.data)
             lora_B_deltas.append(current_adapter_lora_B.data)
-
+        valid_weights = torch.tensor(valid_weights).to(lora_A_deltas[0].device)
         lora_deltas = [lora_A_deltas, lora_B_deltas]
         for i, task_tensors in enumerate(lora_deltas):
             if combination_type == "linear":
