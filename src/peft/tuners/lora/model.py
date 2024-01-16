@@ -611,7 +611,7 @@ class LoraModel(BaseTuner):
             lora_B_deltas.append(current_adapter_lora_B.data)
         valid_weights = torch.tensor(valid_weights).to(lora_A_deltas[0].device)
         lora_deltas = [lora_A_deltas, lora_B_deltas]
-        dtype = lora_A_deltas[0].stype
+        dtype = lora_A_deltas[0].dtype
         for i, task_tensors in enumerate(lora_deltas):
             if combination_type == "linear":
                 lora_deltas[i] = task_arthimetic(task_tensors, valid_weights)
