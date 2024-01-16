@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from typing import Literal
+
 import torch
 
 
@@ -131,7 +132,8 @@ def dare_linear(task_tensors, weights, density):
     while len(task_tensors.shape) > len(weights.shape):
         weights.unsqueeze_(-1)
     weighted_task_tensors = task_tensors * weights
-    return weighted_task_tensors
+    mixed_task_tensors = weighted_task_tensors.sum(dim=0)
+    return mixed_task_tensors
 
 
 def dare_ties(task_tensors, weights, density, majority_sign_method="total"):
