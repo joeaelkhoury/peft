@@ -93,9 +93,9 @@ def calculate_majority_sign_mask(tensor: torch.Tensor, method: Literal["total", 
     return sign == majority_sign
 
 
-def disjoint_merge(task_tensors, majority_sign_mask, weights):
+def disjoint_merge(task_tensors, majority_sign_mask):
     mixed_task_tensors = (task_tensors * majority_sign_mask).sum(dim=0)
-    num_params_preserved = (majority_sign_mask).sum(dim=0)
+    num_params_preserved = majority_sign_mask.sum(dim=0)
     return mixed_task_tensors / torch.clamp(num_params_preserved, min=1.0)
 
 
@@ -120,7 +120,7 @@ def ties(task_tensors, weights, density, majority_sign_method="total"):
     # Elect Sign
     majority_sign_mask = calculate_majority_sign_mask(weighted_task_tensors, method=majority_sign_method)
     # Disjoint Merge
-    mixed_task_tensors = disjoint_merge(weighted_task_tensors, majority_sign_mask, weights)
+    mixed_task_tensors = disjoint_merge(weighted_task_tensors, majority_sign_mask)
     return mixed_task_tensors
 
 
@@ -147,5 +147,5 @@ def dare_ties(task_tensors, weights, density, majority_sign_method="total"):
     # Elect Sign
     majority_sign_mask = calculate_majority_sign_mask(weighted_task_tensors, method=majority_sign_method)
     # Disjoint Merge
-    mixed_task_tensors = disjoint_merge(weighted_task_tensors, majority_sign_mask, weights)
+    mixed_task_tensors = disjoint_merge(weighted_task_tensors, majority_sign_mask)
     return mixed_task_tensors
