@@ -95,7 +95,7 @@ def calculate_majority_sign_mask(tensor: torch.Tensor, method: Literal["total", 
 
 def disjoint_merge(task_tensors, majority_sign_mask, weights):
     mixed_task_tensors = (task_tensors * majority_sign_mask).sum(dim=0)
-    num_params_preserved = (weights * majority_sign_mask).sum(dim=0)
+    num_params_preserved = (majority_sign_mask).sum(dim=0)
     return mixed_task_tensors / torch.clamp(num_params_preserved, min=1.0)
 
 
