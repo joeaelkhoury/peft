@@ -386,12 +386,21 @@ def fsdp_auto_wrap_policy(model):
         return False
 
     lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
+
+    def mp_lambda_policy_fn(module):
+        if module.dtype in [torch.float16, torch.bfloat16]:
+            return True
+        return False
+
+    mp_lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=mp_lambda_policy_fn)
     transformer_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls=transformer_cls_to_wrap,
     )
 
-    auto_wrap_policy = functools.partial(_or_policy, policies=[lambda_policy, transformer_wrap_policy])
+    auto_wrap_policy = functools.partial(
+        _or_policy, policies=[lambda_policy, mp_lambda_policy, transformer_wrap_policy]
+    )
     return auto_wrap_policy
 
 
