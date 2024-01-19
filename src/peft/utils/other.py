@@ -100,11 +100,11 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
 
     if not is_gptq_quantized:
         # cast all non 8-bit/4-bit parameters to fp32
-        for param in model.parameters():
-            if param.__class__.__name__ not in ("Params4bit", "Int8Params") and (
-                (param.dtype == torch.float16) or (param.dtype == torch.bfloat16)
-            ):
-                param.data = param.data.to(torch.float32)
+        # for param in model.parameters():
+        #     if param.__class__.__name__ not in ("Params4bit", "Int8Params") and (
+        #         (param.dtype == torch.float16) or (param.dtype == torch.bfloat16)
+        #     ):
+        #         param.data = param.data.to(torch.float32)
 
     if (loaded_in_kbit or is_gptq_quantized) and use_gradient_checkpointing:
         # When having `use_reentrant=False` + gradient_checkpointing, there is no need for this hack
