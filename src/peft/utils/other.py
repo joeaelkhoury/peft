@@ -388,11 +388,11 @@ def fsdp_auto_wrap_policy(model):
     lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
 
     def mp_lambda_policy_fn(module):
-        try:
-            if next(module.parameters(recurse=False)).dtype in [torch.float16, torch.bfloat16]:
-                return True
-        except:  # noqa: E722
-            return False
+        # try:
+        #     if next(module.parameters(recurse=False)).dtype in [torch.float16, torch.bfloat16]:
+        #         return True
+        # except:  # noqa: E722
+        #     return False
         return False
 
     mp_lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=mp_lambda_policy_fn)
