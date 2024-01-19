@@ -494,6 +494,12 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
         r"""
         Returns the number of trainable parameters and the number of all parameters in the model.
         """
+        dtype2bytes = {}
+        dtype2bytes[torch.float32] = 4
+        dtype2bytes[torch.float16] = 2
+        dtype2bytes[torch.bfloat16] = 2
+        dtype2bytes[torch.uint8] = 1
+        dtype2bytes[torch.int8] = 1
         trainable_params = 0
         all_param = 0
         for _, param in self.named_parameters():
@@ -503,10 +509,11 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                 num_params = param.ds_numel
 
             # Due to the design of 4bit linear layers from bitsandbytes
-            # one needs to multiply the number of parameters by 2 to get
+            # one needs to multiply the number of parameters by 2*bytes of the param dtype to get
             # the correct number of parameters
             if param.__class__.__name__ == "Params4bit":
-                num_params = num_params * 2
+                bytes = dtype2bytes[param.quant_storage] if hasattr(param, "quant_storage") else 1
+                num_params = num_params * 2 * bytes
 
             all_param += num_params
             if param.requires_grad:

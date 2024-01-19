@@ -99,9 +99,11 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
         param.requires_grad = False
 
     if not is_gptq_quantized:
-        # cast all non INT8 parameters to fp32
+        # cast all non 8-bit/4-bit parameters to fp32
         for param in model.parameters():
-            if (param.dtype == torch.float16) or (param.dtype == torch.bfloat16):
+            if param.__class__.__name__ not in ("Params4bit", "Int8Params") and (
+                (param.dtype == torch.float16) or (param.dtype == torch.bfloat16)
+            ):
                 param.data = param.data.to(torch.float32)
 
     if (loaded_in_kbit or is_gptq_quantized) and use_gradient_checkpointing:
